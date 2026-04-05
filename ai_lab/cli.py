@@ -33,6 +33,13 @@ def main() -> None:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8787)
 
+    train_parser = subparsers.add_parser("train", help="Prepare and optionally launch a PEFT/LoRA training job.")
+    train_parser.add_argument("--config", default="config/lab.sample.yaml")
+    train_parser.add_argument("--synthetic", default=None)
+    train_parser.add_argument("--output-dir", default=None)
+    train_parser.add_argument("--dry-run", action="store_true")
+    train_parser.add_argument("--load-in-4bit", action="store_true")
+
     args = parser.parse_args()
 
     if args.command == "serve":
@@ -48,6 +55,25 @@ def main() -> None:
             str(args.port),
         ]
         serve_main()
+        return
+
+    if args.command == "train":
+        from ai_lab.scripts.train_peft_sft import main as train_main
+
+        sys.argv = [
+            "ai_lab.scripts.train_peft_sft",
+            "--config",
+            args.config,
+        ]
+        if args.synthetic:
+            sys.argv.extend(["--synthetic", args.synthetic])
+        if args.output_dir:
+            sys.argv.extend(["--output-dir", args.output_dir])
+        if args.dry_run:
+            sys.argv.append("--dry-run")
+        if args.load_in_4bit:
+            sys.argv.append("--load-in-4bit")
+        train_main()
         return
 
     config_path = Path(args.config)
@@ -89,4 +115,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -6,8 +6,8 @@ This directory stores the local-first research lab artifacts.
 - `datasets/` - train/eval JSONL files and generated synthetic data
 - `runs/` - full experiment summaries
 - `eval_results/` - per-task evaluation artifacts
+- `indexes/` - cached chunk/index artifacts keyed by document fingerprint
 - `artifacts/` - any auxiliary exports or checkpoints
 - `lab.sqlite3` - SQLite log of experiment runs and results
 
 Runtime outputs can be regenerated. The sample docs and datasets are checked in so the MVP runs immediately.
-

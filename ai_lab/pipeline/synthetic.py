@@ -33,7 +33,8 @@ def build_synthetic_examples(
         task_results = sorted(task_results, key=lambda item: item.score, reverse=True)
         if not task_results:
             continue
-        best_result = task_results[0]
+        passed_results = [result for result in task_results if result.passed]
+        best_result = passed_results[0] if passed_results else task_results[0]
         baseline_result = next((item for item in task_results if item.variant == "baseline"), None)
         baseline_score = baseline_result.score if baseline_result else 0.0
         improvement = best_result.score - baseline_score

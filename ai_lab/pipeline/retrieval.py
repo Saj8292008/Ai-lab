@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
@@ -63,6 +64,23 @@ class SparseVectorIndex:
         hits.sort(key=lambda hit: hit.score, reverse=True)
         return hits[:top_k]
 
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "idf": self.idf,
+            "vectors": self.vectors,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any], chunks: list[Chunk]) -> "SparseVectorIndex":
+        return cls(
+            chunks=chunks,
+            idf={str(key): float(value) for key, value in payload.get("idf", {}).items()},
+            vectors=[
+                {str(token): float(weight) for token, weight in vector.items()}
+                for vector in payload.get("vectors", [])
+            ],
+        )
+
 
 def _tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
@@ -89,4 +107,3 @@ def _dot(left: dict[str, float], right: dict[str, float]) -> float:
     if len(left) > len(right):
         left, right = right, left
     return sum(weight * right.get(token, 0.0) for token, weight in left.items())
-

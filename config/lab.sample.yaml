@@ -1,6 +1,14 @@
 project_name: sydney-ai-research-lab
 base_model: Qwen/Qwen3-1.7B
 hardware_profile: apple-silicon-16gb
+model:
+  provider: auto
+  name: qwen2.5:3b-instruct
+  system_prompt: You are a local research assistant. Be concise, factual, and use the retrieved context.
+  temperature: 0.2
+  max_tokens: 512
+  ollama_host: http://localhost:11434
+  llama_command: llama-cli -m models/qwen2.5-3b-instruct-q4_k_m.gguf -p {prompt}
 docs_dir: storage/docs
 eval_file: storage/datasets/evals.jsonl
 train_file: storage/datasets/train.jsonl

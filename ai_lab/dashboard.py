@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import html
 import json
-from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +54,9 @@ def build_lab_state(
 
     recent_runs = store.recent_runs(limit=5)
     latest_stored_run = store.latest_run() or {}
+    latest_metrics = json.loads(latest_stored_run.get("metrics_json", "{}")) if latest_stored_run else {}
+    latest_model = latest_metrics.get("model", {}) if isinstance(latest_metrics, dict) else {}
+    latest_cache = latest_metrics.get("cache", {}) if isinstance(latest_metrics, dict) else {}
     if latest_stored_run:
         last_run = {
             **last_run,
@@ -67,6 +69,7 @@ def build_lab_state(
 
     reports = load_reports(project_root / "reports")
     loops = build_default_loops(config.get("project_name", "sydney-ai-lab"))
+    comparisons = _build_run_comparisons(recent_runs)
 
     return {
         "project_name": config.get("project_name", "sydney-ai-lab"),
@@ -77,6 +80,8 @@ def build_lab_state(
         "docs_dir": str(config.get("docs_dir", project_root / "storage" / "docs")),
         "output_dir": str(config.get("output_dir", "storage/runs")),
         "database_path": str(storage_dir / "lab.sqlite3"),
+        "model_backend": f"{latest_model.get('provider', 'auto')}:{latest_model.get('name', config.get('base_model', 'unknown'))}",
+        "cache_state": "hit" if latest_cache.get("hit") else "miss",
         "dataset_counts": {
             "train": _count_jsonl_rows(train_file),
             "eval": _count_jsonl_rows(eval_file),
@@ -87,6 +92,7 @@ def build_lab_state(
         "loops": loops,
         "reports": reports,
         "experiments": _build_experiments(recent_runs, loops, reports),
+        "comparisons": comparisons,
     }
 
 
@@ -146,6 +152,37 @@ def _build_experiments(
     return experiments
 
 
+def _build_run_comparisons(recent_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    comparisons: list[dict[str, Any]] = []
+    previous_rag = None
+
+    for run in reversed(recent_runs):
+        metrics = json.loads(run.get("metrics_json", "{}"))
+        variants = metrics.get("variants", {})
+        rag = variants.get("rag", {})
+        baseline = variants.get("baseline", {})
+        rag_avg = float(rag.get("avg_score", 0.0))
+        baseline_avg = float(baseline.get("avg_score", 0.0))
+        delta = rag_avg - previous_rag if previous_rag is not None else 0.0
+        previous_rag = rag_avg
+        comparisons.append(
+            {
+                "run_id": run.get("run_id", "unknown"),
+                "created_at": run.get("created_at", "unknown"),
+                "name": run.get("name", "experiment"),
+                "docs": metrics.get("docs", 0),
+                "chunks": metrics.get("chunks", 0),
+                "baseline_avg": baseline_avg,
+                "rag_avg": rag_avg,
+                "pass_rate": float(rag.get("pass_rate", 0.0)),
+                "delta": delta,
+                "synthetic_examples": metrics.get("synthetic_examples", 0),
+                "cache_hit": bool(metrics.get("cache", {}).get("hit", False)),
+            }
+        )
+    return list(reversed(comparisons))
+
+
 def render_dashboard_html(state: dict[str, Any]) -> str:
     dataset_counts = state.get("dataset_counts", {})
     project_name = html.escape(str(state.get("project_name", "sydney-ai-research-lab")))
@@ -159,11 +196,14 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
     docs_dir = html.escape(str(state.get("docs_dir", "storage/docs")))
     database_path = html.escape(str(state.get("database_path", "storage/lab.sqlite3")))
     output_dir = html.escape(str(state.get("output_dir", "storage/runs")))
+    model_backend = html.escape(str(state.get("model_backend", "auto")))
+    cache_state = html.escape(str(state.get("cache_state", "unknown")))
     created_at = html.escape(str(state.get("last_run", {}).get("created_at", "not-run-yet")))
     recent_runs = state.get("recent_runs", [])
     loops = state.get("loops", [])
     reports = state.get("reports", [])
     experiments = state.get("experiments", [])
+    comparisons = state.get("comparisons", [])
 
     summary_cards = [
         _metric_card("Train samples", train_count, train_file),
@@ -188,6 +228,7 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
 
     experiment_cards = "".join(_experiment_card(experiment) for experiment in experiments) or '<article class="list-card"><p class="muted">No experiments yet.</p></article>'
     chart_svg = _render_experiment_chart(experiments)
+    comparison_table = _render_comparison_table(comparisons)
 
     return f"""<!doctype html>
 <html>
@@ -267,6 +308,10 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
       .legend-swatch {{ width: 22px; height: 4px; border-radius: 999px; display: inline-block; }}
       .legend-swatch.success {{ background: var(--good); }}
       .legend-swatch.failure {{ background: var(--bad); }}
+      .comparison-table-wrap {{ overflow-x: auto; }}
+      .comparison-table {{ width: 100%; border-collapse: collapse; min-width: 760px; }}
+      .comparison-table th, .comparison-table td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
+      .comparison-table th {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }}
       @media (max-width: 980px) {{
         .hero, .grid-2, .metrics-grid {{ grid-template-columns: 1fr; }}
       }}
@@ -283,6 +328,8 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
             <span class="pill neutral">{status}</span>
             <span class="pill">{base_model}</span>
             <span class="pill">{hardware}</span>
+            <span class="pill">{model_backend}</span>
+            <span class="pill">{cache_state}</span>
             <span class="pill">{created_at}</span>
           </div>
           <p class="muted">Output directory: {output_dir}</p>
@@ -339,6 +386,11 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
           {report_cards}
         </div>
       </section>
+
+      <section class="panel">
+        <div class="section-label">Run Comparison</div>
+        {comparison_table}
+      </section>
     </main>
   </body>
 </html>"""
@@ -382,6 +434,38 @@ def _experiment_card(experiment: dict[str, Any]) -> str:
         f'<div class="meta">{html.escape(str(experiment.get("created_at", "unknown")))} · {html.escape(str(experiment.get("mode", "unknown")))}</div>'
         f'<p>Best score {float(experiment.get("best_score", 0.0)):.3f} · docs {experiment.get("docs", 0)} · chunks {experiment.get("chunks", 0)}</p>'
         "</article>"
+    )
+
+
+def _render_comparison_table(comparisons: list[dict[str, Any]]) -> str:
+    if not comparisons:
+        return '<p class="muted">No run comparisons yet.</p>'
+
+    rows = []
+    for comparison in comparisons[:6]:
+        delta = float(comparison.get("delta", 0.0))
+        delta_class = "success" if delta >= 0 else "failure"
+        rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(comparison.get('created_at', 'unknown')))}</td>"
+            f"<td>{html.escape(str(comparison.get('name', 'run')))}</td>"
+            f"<td>{comparison.get('docs', 0)}</td>"
+            f"<td>{comparison.get('chunks', 0)}</td>"
+            f"<td>{float(comparison.get('baseline_avg', 0.0)):.3f}</td>"
+            f"<td>{float(comparison.get('rag_avg', 0.0)):.3f}</td>"
+            f"<td><span class=\"pill {delta_class}\">{delta:+.3f}</span></td>"
+            f"<td>{float(comparison.get('pass_rate', 0.0)):.2f}</td>"
+            f"<td>{comparison.get('synthetic_examples', 0)}</td>"
+            "</tr>"
+        )
+
+    return (
+        '<div class="comparison-table-wrap">'
+        '<table class="comparison-table">'
+        '<thead><tr><th>Created</th><th>Run</th><th>Docs</th><th>Chunks</th><th>Baseline</th><th>RAG</th><th>Delta</th><th>Pass Rate</th><th>Synthetic</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table>"
+        "</div>"
     )
 
 

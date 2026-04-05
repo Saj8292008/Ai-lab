@@ -22,6 +22,8 @@ jay_training_data.jsonl
 .dockerignore
 .env.example
 storage/lab.sqlite3
+storage/artifacts/
+storage/indexes/
 storage/runs/*.json
 storage/eval_results/*.json
 storage/synthetic/*.jsonl
