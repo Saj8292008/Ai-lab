@@ -1,0 +1,12 @@
+project_name: sydney-ai-research-lab
+base_model: Qwen/Qwen3-1.7B
+hardware_profile: apple-silicon-16gb
+docs_dir: storage/docs
+eval_file: storage/datasets/evals.jsonl
+train_file: storage/datasets/train.jsonl
+output_dir: storage/runs
+database_path: storage/lab.sqlite3
+chunk_words: 180
+chunk_overlap: 40
+top_k: 4
+min_synthetic_score: 0.45

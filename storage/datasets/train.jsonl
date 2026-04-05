@@ -1,0 +1,4 @@
+{"instruction":"Summarize the first three lab products to test.","input":"","output":"The first three lab products to test are a private business assistant LoRA, a niche creator style/model pack, and a local knowledge worker copilot for docs and drafting.","source":"seed-manual"}
+{"instruction":"Summarize the recommended hardware strategy.","input":"","output":"Apple Silicon is best for data cleaning, tiny LoRA experiments, evals, and packaging. Larger NVIDIA hardware is for 7B to 14B QLoRA work, batched evals, and generation benchmarking.","source":"seed-manual"}
+{"instruction":"Summarize the weekly research cadence.","input":"","output":"Weekly cadence means compare winning runs, kill weak directions, and package one demo or case study.","source":"seed-manual"}
+
