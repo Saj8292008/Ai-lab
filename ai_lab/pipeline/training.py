@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ai_lab.lab_manifest import build_run_manifest, recommend_recipe
+from ai_lab.pipeline.cloud import build_cloud_training_bundle
 from ai_lab.pipeline.synthetic import SyntheticExample, write_jsonl
 
 
@@ -20,6 +21,7 @@ def build_peft_training_artifacts(
     lora_r: int = 8,
     lora_alpha: int = 16,
     target_modules: Iterable[str] | None = None,
+    cloud_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -49,7 +51,7 @@ def build_peft_training_artifacts(
     training_config_path = output / "training_config.json"
     training_config_path.write_text(json.dumps(training_config, indent=2, sort_keys=True))
 
-    return {
+    result = {
         "manifest": manifest,
         "manifest_path": str(manifest_path),
         "training_config": training_config,
@@ -59,6 +61,15 @@ def build_peft_training_artifacts(
         "run_command": f"python3 -m ai_lab.scripts.train_peft_sft --config {training_config_path}",
     }
 
+    if cloud_config and bool(cloud_config.get("enabled", False)):
+        result["cloud"] = build_cloud_training_bundle(
+            output_dir=output,
+            training_config=training_config,
+            cloud_config=cloud_config,
+        )
+
+    return result
+
 
 def build_lora_training_artifacts(
     *,
@@ -67,6 +78,7 @@ def build_lora_training_artifacts(
     base_model: str,
     hardware_profile: str,
     synthetic_examples: list[SyntheticExample],
+    cloud_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -78,7 +90,7 @@ def build_lora_training_artifacts(
         base_model=base_model,
         hardware_profile=hardware_profile,
         synthetic_dataset_path=train_path,
+        cloud_config=cloud_config,
     )
     result["train_path"] = str(train_path)
     return result
-

@@ -48,8 +48,9 @@ class ExperimentRunnerTests(unittest.TestCase):
             self.assertIsNotNone(run_record)
             metrics = json.loads(run_record["metrics_json"])
             self.assertGreater(metrics["variants"]["rag"]["avg_score"], metrics["variants"]["baseline"]["avg_score"])
+            self.assertIn("avg_latency_seconds", metrics["variants"]["rag"])
+            self.assertIn("estimated_cost_usd", metrics["variants"]["rag"])
 
 
 if __name__ == "__main__":
     unittest.main()
-

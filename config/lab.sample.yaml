@@ -9,6 +9,38 @@ model:
   max_tokens: 512
   ollama_host: http://localhost:11434
   llama_command: llama-cli -m models/qwen2.5-3b-instruct-q4_k_m.gguf -p {prompt}
+prompt_library:
+  default_profile: rag
+  profiles:
+    baseline:
+      system_prompt: You are a concise local research assistant.
+      instruction: Answer from the question alone and be explicit when evidence is missing.
+      retrieval_instruction: Do not rely on retrieved context.
+      response_format: Return 1-3 concise sentences with the answer only.
+      use_retrieval: false
+    rag:
+      system_prompt: You are a local research assistant. Use the retrieved context and prefer direct evidence.
+      instruction: Use the retrieved context, prefer direct evidence, and keep the answer concise.
+      retrieval_instruction: Ground the answer in the strongest retrieved evidence.
+      response_format: Return 1-3 concise sentences with the answer only.
+      use_retrieval: true
+    synthesis:
+      system_prompt: You synthesize evidence across chunks without overclaiming.
+      instruction: Combine the best evidence across retrieved chunks and highlight the most relevant signal.
+      retrieval_instruction: Synthesize multiple snippets when they reinforce the same answer.
+      response_format: Return a short synthesis with the answer only.
+      use_retrieval: true
+      include_citations: true
+pricing:
+  prompt_per_1k_tokens: 0.0
+  completion_per_1k_tokens: 0.0
+cloud:
+  enabled: false
+  provider: ssh
+  host: training-host
+  user: ubuntu
+  remote_root: /workspace/ai-lab
+  python: python3
 docs_dir: storage/docs
 eval_file: storage/datasets/evals.jsonl
 train_file: storage/datasets/train.jsonl
@@ -18,3 +50,6 @@ chunk_words: 180
 chunk_overlap: 40
 top_k: 4
 min_synthetic_score: 0.45
+watch:
+  interval_seconds: 15
+  run_on_change: false

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import json
 import re
+from time import perf_counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
 from ai_lab.model_adapters import resolve_model_adapter
 from ai_lab.paths import ensure_lab_directories, storage_root
-from ai_lab.pipeline.cache import fingerprint_documents, load_cached_index, save_cached_index
+from ai_lab.pipeline.cache import ensure_cached_index, fingerprint_documents
 from ai_lab.pipeline.chunking import Chunk, chunk_documents
 from ai_lab.pipeline.evals import EvalResult, EvalTask, load_eval_tasks, score_answer
 from ai_lab.pipeline.ingest import Document, load_documents
+from ai_lab.pipeline.prompts import PromptLibrary
 from ai_lab.pipeline.retrieval import SearchHit, SparseVectorIndex
 from ai_lab.pipeline.synthetic import build_synthetic_examples, write_jsonl
 from ai_lab.storage import LabStore, now_iso
@@ -26,6 +28,7 @@ class ExperimentVariant:
     use_retrieval: bool
     top_k: int = 4
     instruction: str = ""
+    prompt_profile: str | None = None
 
 
 @dataclass
@@ -46,12 +49,14 @@ DEFAULT_VARIANTS = [
         use_retrieval=False,
         top_k=0,
         instruction="Answer from the question alone.",
+        prompt_profile="baseline",
     ),
     ExperimentVariant(
         name="rag",
         use_retrieval=True,
         top_k=4,
         instruction="Use the retrieved context, prefer direct evidence, and keep the answer concise.",
+        prompt_profile="rag",
     ),
 ]
 
@@ -75,6 +80,8 @@ def run_experiment(
     overlap_words = int(config.get("chunk_overlap", 40))
     top_k = int(config.get("top_k", 4))
     min_synthetic_score = float(config.get("min_synthetic_score", 0.72))
+    prompt_library = PromptLibrary.from_config(config)
+    pricing = _pricing_config(config)
     model = resolve_model_adapter(config)
 
     docs = load_documents(docs_dir)
@@ -88,29 +95,22 @@ def run_experiment(
         salt=json.dumps(config.get("index_salt", ""), sort_keys=True),
     )
     cache_root = lab_root / "indexes"
-    cached = load_cached_index(cache_root, cache_fingerprint)
-    if cached:
-        chunks = cached.chunks
-        index = cached.index
-        cache_hit = True
-        cache_dir = cached.cache_dir
-    else:
-        chunks = chunk_documents(docs, chunk_words=chunk_words, overlap_words=overlap_words)
-        index = SparseVectorIndex.build(chunks)
-        cached = save_cached_index(
-            cache_root,
-            cache_fingerprint,
-            documents=docs,
-            chunks=chunks,
-            index=index,
-            metadata={
-                "chunk_words": chunk_words,
-                "overlap_words": overlap_words,
-                "docs_dir": str(docs_dir),
-            },
-        )
-        cache_hit = False
-        cache_dir = cached.cache_dir
+    cached = ensure_cached_index(
+        cache_root,
+        cache_fingerprint,
+        documents=docs,
+        chunk_words=chunk_words,
+        overlap_words=overlap_words,
+        metadata={
+            "chunk_words": chunk_words,
+            "overlap_words": overlap_words,
+            "docs_dir": str(docs_dir),
+        },
+    )
+    chunks = cached.chunks
+    index = cached.index
+    cache_hit = cached.hit
+    cache_dir = cached.cache_dir
 
     tasks = load_eval_tasks(eval_file)
     if not tasks:
@@ -119,36 +119,52 @@ def run_experiment(
     results: list[EvalResult] = []
     variant_scores: dict[str, list[float]] = {variant.name: [] for variant in variants}
     variant_passes: dict[str, list[bool]] = {variant.name: [] for variant in variants}
+    variant_latencies: dict[str, list[float]] = {variant.name: [] for variant in variants}
+    variant_prompt_tokens: dict[str, list[float]] = {variant.name: [] for variant in variants}
+    variant_completion_tokens: dict[str, list[float]] = {variant.name: [] for variant in variants}
+    variant_costs: dict[str, list[float]] = {variant.name: [] for variant in variants}
     eval_rows: list[dict[str, Any]] = []
     selected_model_backend: dict[str, str] | None = None
 
     for variant in variants:
         for task in tasks:
             retrieved = index.search(task.prompt, top_k=variant.top_k or top_k) if variant.use_retrieval else []
-            prompt = _build_generation_prompt(
+            rendered = prompt_library.render(
                 task=task,
                 retrieved=retrieved,
-                variant=variant,
+                variant_name=variant.name,
+                model_system_prompt=_model_config(config).get("system_prompt", ""),
+                variant_instruction=variant.instruction,
+                prompt_profile=variant.prompt_profile,
             )
-            system_prompt = _system_prompt(config, variant)
+            generation_started = perf_counter()
             generation = model.generate(
-                prompt,
-                system_prompt=system_prompt,
+                rendered.prompt,
+                system_prompt=rendered.system_prompt,
                 temperature=float(_model_config(config).get("temperature", 0.2)),
                 max_tokens=int(_model_config(config).get("max_tokens", 512)),
             )
+            latency_seconds = perf_counter() - generation_started
             if selected_model_backend is None:
                 selected_model_backend = {
                     "provider": generation.provider,
                     "name": generation.model_name,
                 }
             answer = generation.text.strip() or _fallback_answer(task, retrieved, variant)
+            token_stats = _token_stats(rendered.prompt, answer, generation.metadata)
+            estimated_cost = _estimate_cost(token_stats, pricing)
             metrics = score_answer(task, answer, retrieved)
             metrics.update(
                 {
                     "model_provider": generation.provider,
                     "model_name": generation.model_name,
                     "fallback_used": generation.fallback_used,
+                    "latency_seconds": round(latency_seconds, 4),
+                    "prompt_tokens": token_stats["prompt_tokens"],
+                    "completion_tokens": token_stats["completion_tokens"],
+                    "total_tokens": token_stats["total_tokens"],
+                    "estimated_cost_usd": round(estimated_cost, 6),
+                    "prompt_profile": rendered.profile_name,
                 }
             )
             result = EvalResult(
@@ -174,6 +190,10 @@ def run_experiment(
             results.append(result)
             variant_scores[variant.name].append(result.score)
             variant_passes[variant.name].append(result.passed)
+            variant_latencies[variant.name].append(latency_seconds)
+            variant_prompt_tokens[variant.name].append(float(token_stats["prompt_tokens"]))
+            variant_completion_tokens[variant.name].append(float(token_stats["completion_tokens"]))
+            variant_costs[variant.name].append(float(estimated_cost))
             eval_rows.append(
                 {
                     "run_id": None,
@@ -214,10 +234,21 @@ def run_experiment(
                 else 0.0,
                 "passed": sum(1 for passed in variant_passes[name] if passed),
                 "total": len(variant_passes[name]),
+                "avg_latency_seconds": round(sum(variant_latencies[name]) / len(variant_latencies[name]), 4)
+                if variant_latencies[name]
+                else 0.0,
+                "avg_prompt_tokens": round(sum(variant_prompt_tokens[name]) / len(variant_prompt_tokens[name]), 2)
+                if variant_prompt_tokens[name]
+                else 0.0,
+                "avg_completion_tokens": round(sum(variant_completion_tokens[name]) / len(variant_completion_tokens[name]), 2)
+                if variant_completion_tokens[name]
+                else 0.0,
+                "estimated_cost_usd": round(sum(variant_costs[name]), 6),
             }
             for name, scores in variant_scores.items()
         },
         "synthetic_examples": len(synthetic_examples),
+        "pricing": pricing,
     }
 
     artifact = {
@@ -263,6 +294,7 @@ def run_experiment(
         "synthetic_dataset_path": str(synthetic_path),
         "cache": metrics["cache"],
         "model": metrics["model"],
+        "prompt_library": prompt_library_payload(prompt_library),
     }
 
     artifact_name = f"{run_created_at.replace(':', '-')}.json"
@@ -313,51 +345,6 @@ def _model_config(config: dict[str, Any]) -> dict[str, Any]:
     model_config = config.get("model", {}) or {}
     return model_config if isinstance(model_config, dict) else {}
 
-
-def _system_prompt(config: dict[str, Any], variant: ExperimentVariant) -> str:
-    model_config = _model_config(config)
-    components = [
-        str(model_config.get("system_prompt", "")).strip(),
-        str(variant.instruction).strip(),
-    ]
-    parts = [part for part in components if part]
-    return "\n".join(parts) if parts else "You are a concise local research assistant."
-
-
-def _build_generation_prompt(
-    *,
-    task: EvalTask,
-    retrieved: list[SearchHit],
-    variant: ExperimentVariant,
-) -> str:
-    rubric = task.rubric or {}
-    required_terms = ", ".join(str(term) for term in rubric.get("required_terms", task.expected_terms)) or "none"
-    forbidden_terms = ", ".join(str(term) for term in rubric.get("forbidden_terms", [])) or "none"
-    context_lines = ["Retrieved context:", "==="]
-    if retrieved:
-        for index, hit in enumerate(retrieved, start=1):
-            context_lines.append(f"[{index}] {hit.chunk.title} ({hit.chunk.path})")
-            context_lines.append(hit.chunk.text.strip())
-            context_lines.append("---")
-    else:
-        context_lines.append("(no retrieved context)")
-    context_lines.append("===")
-
-    return "\n".join(
-        [
-            f"Task: {task.prompt}",
-            f"Variant: {variant.name}",
-            "Rubric:",
-            f"- Required terms: {required_terms}",
-            f"- Forbidden terms: {forbidden_terms}",
-            f"- Must use retrieval: {bool(rubric.get('must_use_retrieval', False))}",
-            "Answer using the context if it is present.",
-            *context_lines,
-            "Return 1-3 concise sentences with the answer only.",
-        ]
-    )
-
-
 def _fallback_answer(task: EvalTask, retrieved: list[SearchHit], variant: ExperimentVariant) -> str:
     if not variant.use_retrieval:
         return f"I do not have enough evidence to answer: {task.prompt}"
@@ -407,3 +394,73 @@ def _clean_candidate(line: str) -> str:
 
 def _tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
+
+
+def _pricing_config(config: dict[str, Any]) -> dict[str, float]:
+    pricing = config.get("pricing", {}) or {}
+    if not isinstance(pricing, dict):
+        pricing = {}
+    return {
+        "prompt_per_1k_tokens": float(pricing.get("prompt_per_1k_tokens", 0.0)),
+        "completion_per_1k_tokens": float(pricing.get("completion_per_1k_tokens", 0.0)),
+    }
+
+
+def _token_stats(prompt: str, answer: str, metadata: dict[str, Any] | None) -> dict[str, float]:
+    metadata = metadata or {}
+    prompt_tokens = _find_numeric(metadata, ("prompt_eval_count", "prompt_tokens", "input_tokens"))
+    completion_tokens = _find_numeric(metadata, ("eval_count", "completion_tokens", "output_tokens"))
+    total_tokens = _find_numeric(metadata, ("total_tokens",))
+
+    prompt_tokens = prompt_tokens if prompt_tokens is not None else float(_estimate_tokens(prompt))
+    completion_tokens = completion_tokens if completion_tokens is not None else float(_estimate_tokens(answer))
+    total_tokens = total_tokens if total_tokens is not None else prompt_tokens + completion_tokens
+
+    return {
+        "prompt_tokens": float(prompt_tokens),
+        "completion_tokens": float(completion_tokens),
+        "total_tokens": float(total_tokens),
+    }
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(_tokenize(text)))
+
+
+def _estimate_cost(token_stats: dict[str, float], pricing: dict[str, float]) -> float:
+    prompt_rate = float(pricing.get("prompt_per_1k_tokens", 0.0))
+    completion_rate = float(pricing.get("completion_per_1k_tokens", 0.0))
+    return (token_stats["prompt_tokens"] / 1000.0) * prompt_rate + (token_stats["completion_tokens"] / 1000.0) * completion_rate
+
+
+def _find_numeric(payload: Any, keys: tuple[str, ...]) -> float | None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in keys and isinstance(value, (int, float)):
+                return float(value)
+            nested = _find_numeric(value, keys)
+            if nested is not None:
+                return nested
+    elif isinstance(payload, list):
+        for item in payload:
+            nested = _find_numeric(item, keys)
+            if nested is not None:
+                return nested
+    return None
+
+
+def prompt_library_payload(prompt_library: PromptLibrary) -> dict[str, Any]:
+    return {
+        "default_profile_name": prompt_library.default_profile_name,
+        "profiles": {
+            name: {
+                "system_prompt": profile.system_prompt,
+                "instruction": profile.instruction,
+                "retrieval_instruction": profile.retrieval_instruction,
+                "response_format": profile.response_format,
+                "use_retrieval": profile.use_retrieval,
+                "include_citations": profile.include_citations,
+            }
+            for name, profile in prompt_library.profiles.items()
+        },
+    }

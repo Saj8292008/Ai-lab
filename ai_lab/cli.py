@@ -39,6 +39,13 @@ def main() -> None:
     train_parser.add_argument("--output-dir", default=None)
     train_parser.add_argument("--dry-run", action="store_true")
     train_parser.add_argument("--load-in-4bit", action="store_true")
+    train_parser.add_argument("--cloud", action="store_true")
+
+    watch_parser = subparsers.add_parser("watch", help="Watch local docs and refresh cached indexes on change.")
+    watch_parser.add_argument("--config", default="config/lab.sample.yaml")
+    watch_parser.add_argument("--interval", type=float, default=15.0)
+    watch_parser.add_argument("--run-on-change", action="store_true")
+    watch_parser.add_argument("--once", action="store_true")
 
     args = parser.parse_args()
 
@@ -73,7 +80,28 @@ def main() -> None:
             sys.argv.append("--dry-run")
         if args.load_in_4bit:
             sys.argv.append("--load-in-4bit")
+        if args.cloud:
+            sys.argv.append("--cloud")
         train_main()
+        return
+
+    if args.command == "watch":
+        from ai_lab.pipeline.watching import iter_document_watch
+
+        config_path = Path(args.config)
+        if not config_path.is_absolute():
+            config_path = repo_root() / config_path
+        config = load_lab_config(config_path)
+        store = LabStore(config_path.parent.parent / "storage")
+
+        for snapshot in iter_document_watch(
+            config,
+            store=store,
+            interval_seconds=args.interval,
+            run_on_change=args.run_on_change,
+            once=args.once,
+        ):
+            print(json.dumps(snapshot, indent=2))
         return
 
     config_path = Path(args.config)

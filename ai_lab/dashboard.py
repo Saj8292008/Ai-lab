@@ -67,9 +67,14 @@ def build_lab_state(
             "artifact_path": latest_stored_run.get("artifact_path"),
         }
 
+    latest_eval_results = (
+        store.eval_results_for_run(str(latest_stored_run.get("run_id"))) if latest_stored_run else []
+    )
+
     reports = load_reports(project_root / "reports")
     loops = build_default_loops(config.get("project_name", "sydney-ai-lab"))
     comparisons = _build_run_comparisons(recent_runs)
+    task_diffs = _build_task_diffs(latest_eval_results)
 
     return {
         "project_name": config.get("project_name", "sydney-ai-lab"),
@@ -93,6 +98,7 @@ def build_lab_state(
         "reports": reports,
         "experiments": _build_experiments(recent_runs, loops, reports),
         "comparisons": comparisons,
+        "task_diffs": task_diffs,
     }
 
 
@@ -113,6 +119,8 @@ def _build_experiments(
                 "created_at": run.get("created_at", "unknown"),
                 "avg_score": metrics.get("variants", {}).get("rag", {}).get("avg_score", 0.0),
                 "best_score": metrics.get("variants", {}).get("rag", {}).get("best_score", 0.0),
+                "avg_latency_seconds": metrics.get("variants", {}).get("rag", {}).get("avg_latency_seconds", 0.0),
+                "estimated_cost_usd": metrics.get("variants", {}).get("rag", {}).get("estimated_cost_usd", 0.0),
                 "docs": metrics.get("docs", 0),
                 "chunks": metrics.get("chunks", 0),
             }
@@ -130,6 +138,8 @@ def _build_experiments(
                 "created_at": "not-run-yet",
                 "avg_score": 0.0,
                 "best_score": 0.0,
+                "avg_latency_seconds": 0.0,
+                "estimated_cost_usd": 0.0,
                 "docs": 0,
                 "chunks": 0,
             }
@@ -144,6 +154,8 @@ def _build_experiments(
                 "created_at": report.get("created_at", "unknown"),
                 "avg_score": 0.0,
                 "best_score": 0.0,
+                "avg_latency_seconds": 0.0,
+                "estimated_cost_usd": 0.0,
                 "docs": 0,
                 "chunks": 0,
             }
@@ -175,6 +187,8 @@ def _build_run_comparisons(recent_runs: list[dict[str, Any]]) -> list[dict[str, 
                 "baseline_avg": baseline_avg,
                 "rag_avg": rag_avg,
                 "pass_rate": float(rag.get("pass_rate", 0.0)),
+                "avg_latency_seconds": float(rag.get("avg_latency_seconds", 0.0)),
+                "estimated_cost_usd": float(rag.get("estimated_cost_usd", 0.0)),
                 "delta": delta,
                 "synthetic_examples": metrics.get("synthetic_examples", 0),
                 "cache_hit": bool(metrics.get("cache", {}).get("hit", False)),
@@ -204,6 +218,7 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
     reports = state.get("reports", [])
     experiments = state.get("experiments", [])
     comparisons = state.get("comparisons", [])
+    task_diffs = state.get("task_diffs", [])
 
     summary_cards = [
         _metric_card("Train samples", train_count, train_file),
@@ -229,6 +244,7 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
     experiment_cards = "".join(_experiment_card(experiment) for experiment in experiments) or '<article class="list-card"><p class="muted">No experiments yet.</p></article>'
     chart_svg = _render_experiment_chart(experiments)
     comparison_table = _render_comparison_table(comparisons)
+    task_diff_cards = _render_task_diff_cards(task_diffs)
 
     return f"""<!doctype html>
 <html>
@@ -309,11 +325,19 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
       .legend-swatch.success {{ background: var(--good); }}
       .legend-swatch.failure {{ background: var(--bad); }}
       .comparison-table-wrap {{ overflow-x: auto; }}
-      .comparison-table {{ width: 100%; border-collapse: collapse; min-width: 760px; }}
+      .comparison-table {{ width: 100%; border-collapse: collapse; min-width: 940px; }}
       .comparison-table th, .comparison-table td {{ text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
       .comparison-table th {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .1em; }}
+      .task-diff-card {{ border-left: 3px solid rgba(103, 232, 249, 0.25); }}
+      .diff-grid {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }}
+      .diff-pane {{ background: rgba(7, 17, 26, 0.7); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }}
+      .diff-label {{ color: var(--accent); text-transform: uppercase; letter-spacing: .08em; font-size: 11px; margin-bottom: 8px; }}
+      .diff-answer {{ margin: 0; white-space: pre-wrap; color: var(--text); font: inherit; line-height: 1.55; }}
+      .diff-support {{ margin: 10px 0 0; padding-left: 18px; color: var(--muted); }}
+      .diff-support li {{ margin-bottom: 6px; }}
       @media (max-width: 980px) {{
         .hero, .grid-2, .metrics-grid {{ grid-template-columns: 1fr; }}
+        .diff-grid {{ grid-template-columns: 1fr; }}
       }}
     </style>
   </head>
@@ -391,6 +415,11 @@ def render_dashboard_html(state: dict[str, Any]) -> str:
         <div class="section-label">Run Comparison</div>
         {comparison_table}
       </section>
+
+      <section class="panel">
+        <div class="section-label">Task Diff View</div>
+        {task_diff_cards}
+      </section>
     </main>
   </body>
 </html>"""
@@ -417,7 +446,8 @@ def _run_card(run: dict[str, Any]) -> str:
         f'<span class="pill {status_class}">{html.escape(str(run.get("status", "unknown")))}'
         "</span></div>"
         f'<div class="meta">Created {html.escape(str(run.get("created_at", "unknown")))} · mode {html.escape(str(run.get("mode", "unknown")))} </div>'
-        f'<p>RAG avg score: {rag.get("avg_score", 0.0):.3f} · docs {metrics.get("docs", 0)} · chunks {metrics.get("chunks", 0)}</p>'
+        f'<p>RAG avg score: {rag.get("avg_score", 0.0):.3f} · latency {rag.get("avg_latency_seconds", 0.0):.2f}s · cost ${rag.get("estimated_cost_usd", 0.0):.4f}</p>'
+        f'<div class="meta">docs {metrics.get("docs", 0)} · chunks {metrics.get("chunks", 0)}</div>'
         "</article>"
     )
 
@@ -432,7 +462,8 @@ def _experiment_card(experiment: dict[str, Any]) -> str:
         f'<span class="pill {pill_class}">{score:.3f}</span>'
         "</div>"
         f'<div class="meta">{html.escape(str(experiment.get("created_at", "unknown")))} · {html.escape(str(experiment.get("mode", "unknown")))}</div>'
-        f'<p>Best score {float(experiment.get("best_score", 0.0)):.3f} · docs {experiment.get("docs", 0)} · chunks {experiment.get("chunks", 0)}</p>'
+        f'<p>Best score {float(experiment.get("best_score", 0.0)):.3f} · latency {float(experiment.get("avg_latency_seconds", 0.0)):.2f}s · cost ${float(experiment.get("estimated_cost_usd", 0.0)):.4f}</p>'
+        f'<div class="meta">docs {experiment.get("docs", 0)} · chunks {experiment.get("chunks", 0)}</div>'
         "</article>"
     )
 
@@ -455,6 +486,8 @@ def _render_comparison_table(comparisons: list[dict[str, Any]]) -> str:
             f"<td>{float(comparison.get('rag_avg', 0.0)):.3f}</td>"
             f"<td><span class=\"pill {delta_class}\">{delta:+.3f}</span></td>"
             f"<td>{float(comparison.get('pass_rate', 0.0)):.2f}</td>"
+            f"<td>{float(comparison.get('avg_latency_seconds', 0.0)):.2f}s</td>"
+            f"<td>${float(comparison.get('estimated_cost_usd', 0.0)):.4f}</td>"
             f"<td>{comparison.get('synthetic_examples', 0)}</td>"
             "</tr>"
         )
@@ -462,11 +495,89 @@ def _render_comparison_table(comparisons: list[dict[str, Any]]) -> str:
     return (
         '<div class="comparison-table-wrap">'
         '<table class="comparison-table">'
-        '<thead><tr><th>Created</th><th>Run</th><th>Docs</th><th>Chunks</th><th>Baseline</th><th>RAG</th><th>Delta</th><th>Pass Rate</th><th>Synthetic</th></tr></thead>'
+        '<thead><tr><th>Created</th><th>Run</th><th>Docs</th><th>Chunks</th><th>Baseline</th><th>RAG</th><th>Delta</th><th>Pass Rate</th><th>Latency</th><th>Cost</th><th>Synthetic</th></tr></thead>'
         f"<tbody>{''.join(rows)}</tbody>"
         "</table>"
         "</div>"
     )
+
+
+def _build_task_diffs(eval_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, dict[str, Any]]] = {}
+    for row in eval_rows:
+        payload = json.loads(row.get("details_json", "{}")) if row.get("details_json") else row
+        task_id = str(payload.get("task_id", row.get("task_id", "unknown")))
+        variant = str(payload.get("variant", row.get("variant", "unknown")))
+        grouped.setdefault(task_id, {})[variant] = payload
+
+    diffs: list[dict[str, Any]] = []
+    for task_id, variants in grouped.items():
+        baseline = variants.get("baseline", {})
+        rag = variants.get("rag", {})
+        if not baseline and not rag:
+            continue
+        baseline_score = float(baseline.get("score", 0.0))
+        rag_score = float(rag.get("score", 0.0))
+        diffs.append(
+            {
+                "task_id": task_id,
+                "delta": rag_score - baseline_score,
+                "baseline": baseline,
+                "rag": rag,
+                "baseline_score": baseline_score,
+                "rag_score": rag_score,
+                "baseline_passed": bool(baseline.get("passed", False)),
+                "rag_passed": bool(rag.get("passed", False)),
+                "baseline_latency_seconds": float(baseline.get("metrics", {}).get("latency_seconds", 0.0)),
+                "rag_latency_seconds": float(rag.get("metrics", {}).get("latency_seconds", 0.0)),
+                "baseline_cost_usd": float(baseline.get("metrics", {}).get("estimated_cost_usd", 0.0)),
+                "rag_cost_usd": float(rag.get("metrics", {}).get("estimated_cost_usd", 0.0)),
+                "baseline_prompt_tokens": float(baseline.get("metrics", {}).get("prompt_tokens", 0.0)),
+                "rag_prompt_tokens": float(rag.get("metrics", {}).get("prompt_tokens", 0.0)),
+                "baseline_completion_tokens": float(baseline.get("metrics", {}).get("completion_tokens", 0.0)),
+                "rag_completion_tokens": float(rag.get("metrics", {}).get("completion_tokens", 0.0)),
+                "retrieved_chunks": rag.get("retrieved_chunks", []),
+            }
+        )
+
+    return sorted(diffs, key=lambda item: item["delta"], reverse=True)
+
+
+def _render_task_diff_cards(task_diffs: list[dict[str, Any]]) -> str:
+    if not task_diffs:
+        return '<p class="muted">No task diff data yet. Run an experiment to populate baseline vs RAG comparisons.</p>'
+
+    cards = []
+    for diff in task_diffs:
+        delta = float(diff.get("delta", 0.0))
+        delta_class = "success" if delta >= 0 else "failure"
+        retrieved_chunks = diff.get("retrieved_chunks", [])
+        support = ""
+        if retrieved_chunks:
+            support = "<ul class=\"diff-support\">" + "".join(
+                f"<li><strong>{html.escape(str(chunk.get('doc_id', 'doc')))}</strong>: {html.escape(str(chunk.get('preview', '')))}</li>"
+                for chunk in retrieved_chunks[:3]
+            ) + "</ul>"
+
+        cards.append(
+            '<article class="list-card task-diff-card">'
+            '<div class="list-head">'
+            f'<h3>{html.escape(str(diff.get("task_id", "task")))}</h3>'
+            f'<span class="pill {delta_class}">{delta:+.3f}</span>'
+            "</div>"
+            f'<div class="meta">Baseline {float(diff.get("baseline_score", 0.0)):.3f} · RAG {float(diff.get("rag_score", 0.0)):.3f} · '
+            f'latency {float(diff.get("baseline_latency_seconds", 0.0)):.2f}s → {float(diff.get("rag_latency_seconds", 0.0)):.2f}s · '
+            f'cost ${float(diff.get("baseline_cost_usd", 0.0)):.4f} → ${float(diff.get("rag_cost_usd", 0.0)):.4f}</div>'
+            '<div class="diff-grid">'
+            f'<div class="diff-pane"><div class="diff-label">Baseline</div><pre class="diff-answer">{html.escape(str(diff.get("baseline", {}).get("answer", "")))}</pre></div>'
+            f'<div class="diff-pane"><div class="diff-label">RAG</div><pre class="diff-answer">{html.escape(str(diff.get("rag", {}).get("answer", "")))}</pre></div>'
+            "</div>"
+            f'<div class="meta">Pass/fail: {html.escape(str(bool(diff.get("baseline_passed", False))))} → {html.escape(str(bool(diff.get("rag_passed", False))))}</div>'
+            f"{support}"
+            "</article>"
+        )
+
+    return "".join(cards)
 
 
 def _render_experiment_chart(experiments: list[dict[str, Any]]) -> str:

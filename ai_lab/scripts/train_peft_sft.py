@@ -28,10 +28,13 @@ def main() -> None:
     parser.add_argument("--lora-alpha", type=int, default=16)
     parser.add_argument("--target-modules", default="q_proj,v_proj")
     parser.add_argument("--load-in-4bit", action="store_true")
+    parser.add_argument("--cloud", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     config = _load_training_config(args)
+    cloud_config = dict(config.get("cloud", {}) or {})
+    cloud_config["enabled"] = bool(args.cloud or cloud_config.get("enabled", False))
     artifact_plan = build_peft_training_artifacts(
         output_dir=config["output_dir"],
         project_name=config["project_name"],
@@ -43,6 +46,7 @@ def main() -> None:
         lora_r=config["lora_r"],
         lora_alpha=config["lora_alpha"],
         target_modules=config["target_modules"],
+        cloud_config=cloud_config,
     )
 
     plan = {
@@ -183,4 +187,3 @@ def _format_example(example: dict[str, Any]) -> dict[str, str]:
 
 if __name__ == "__main__":
     main()
-

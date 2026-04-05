@@ -30,8 +30,31 @@ class DashboardComparisonTests(unittest.TestCase):
                         "baseline_avg": 0.081,
                         "rag_avg": 0.1244,
                         "pass_rate": 0.33,
+                        "avg_latency_seconds": 0.27,
+                        "estimated_cost_usd": 0.0,
                         "delta": 0.0434,
                         "synthetic_examples": 1,
+                    }
+                ],
+                "task_diffs": [
+                    {
+                        "task_id": "lab-products",
+                        "delta": 0.114,
+                        "baseline": {"answer": "Baseline answer", "score": 0.11, "passed": False, "metrics": {"latency_seconds": 0.31, "estimated_cost_usd": 0.0}},
+                        "rag": {"answer": "RAG answer", "score": 0.224, "passed": True, "metrics": {"latency_seconds": 0.26, "estimated_cost_usd": 0.0}, "retrieved_chunks": [{"doc_id": "doc-1", "preview": "Useful evidence"}]},
+                        "baseline_score": 0.11,
+                        "rag_score": 0.224,
+                        "baseline_passed": False,
+                        "rag_passed": True,
+                        "baseline_latency_seconds": 0.31,
+                        "rag_latency_seconds": 0.26,
+                        "baseline_cost_usd": 0.0,
+                        "rag_cost_usd": 0.0,
+                        "baseline_prompt_tokens": 11,
+                        "rag_prompt_tokens": 12,
+                        "baseline_completion_tokens": 5,
+                        "rag_completion_tokens": 7,
+                        "retrieved_chunks": [{"doc_id": "doc-1", "preview": "Useful evidence"}],
                     }
                 ],
             }
@@ -41,6 +64,8 @@ class DashboardComparisonTests(unittest.TestCase):
         self.assertIn("comparison-table", html)
         self.assertIn("heuristic:local-rule-based", html)
         self.assertIn("hit", html)
+        self.assertIn("Task Diff View", html)
+        self.assertIn("diff-answer", html)
 
 
 if __name__ == "__main__":

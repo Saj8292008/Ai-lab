@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ai_lab.pipeline.chunking import Chunk
+from ai_lab.pipeline.chunking import chunk_documents
 from ai_lab.pipeline.ingest import Document
 from ai_lab.pipeline.retrieval import SparseVectorIndex
 
@@ -101,3 +102,28 @@ def save_cached_index(
     (cache_dir / "index.json").write_text(json.dumps(index.to_payload(), indent=2, sort_keys=True))
     return CachedIndexBundle(fingerprint=fingerprint, cache_dir=cache_dir, chunks=chunk_list, index=index, hit=False)
 
+
+def ensure_cached_index(
+    cache_root: str | Path,
+    fingerprint: str,
+    *,
+    documents: Iterable[Document],
+    chunk_words: int,
+    overlap_words: int,
+    metadata: dict[str, Any] | None = None,
+) -> CachedIndexBundle:
+    cached = load_cached_index(cache_root, fingerprint)
+    if cached:
+        return cached
+
+    docs = list(documents)
+    chunks = chunk_documents(docs, chunk_words=chunk_words, overlap_words=overlap_words)
+    index = SparseVectorIndex.build(chunks)
+    return save_cached_index(
+        cache_root,
+        fingerprint,
+        documents=docs,
+        chunks=chunks,
+        index=index,
+        metadata=metadata,
+    )

@@ -10,6 +10,7 @@ This repo is intentionally small and boring:
 - run frozen eval tasks against variants
 - log results to SQLite and JSON artifacts
 - derive synthetic training examples from good outputs
+- track latency, token counts, and estimated cost per run
 - offer optional Ollama or llama.cpp inference backends
 - prepare real PEFT / LoRA training jobs from synthetic outputs
 
@@ -22,8 +23,11 @@ This repo is intentionally small and boring:
 - `ai_lab/pipeline/retrieval.py` - sparse local embedding/index/search
 - `ai_lab/pipeline/evals.py` - eval task loading and scoring
 - `ai_lab/pipeline/synthetic.py` - generate instruction-response examples from strong runs
+- `ai_lab/pipeline/prompts.py` - prompt library for baseline, RAG, and synthesis profiles
 - `ai_lab/pipeline/experiments.py` - orchestrate the eval-driven experiment loop
 - `ai_lab/pipeline/training.py` - prepare LoRA datasets and manifests
+- `ai_lab/pipeline/watching.py` - polling watcher that refreshes cached docs and can rerun experiments
+- `ai_lab/pipeline/cloud.py` - cloud training bundle generator for remote SSH-based launches
 - `ai_lab/model_adapters.py` - local model backends for Ollama, llama.cpp, or fallback heuristic
 - `ai_lab/storage.py` - SQLite-backed run/result logging
 - `config/` - sample configs
@@ -34,14 +38,18 @@ This repo is intentionally small and boring:
 - ingest docs from `storage/docs`
 - chunk them into stable IDs
 - cache chunk/index artifacts by document fingerprint
+- refresh cached docs automatically with a polling watcher
 - build a TF-IDF-like sparse retrieval index
 - query the index from the CLI
 - run baseline and RAG-style experiments through a local model adapter
 - score answers with task-specific rubrics and pass/fail checks
+- inspect per-task baseline vs RAG diffs in the dashboard
+- track latency, prompt tokens, completion tokens, and estimated cost
 - save run artifacts and results to `storage/lab.sqlite3`
 - derive synthetic JSONL from better-scoring outputs
 - show the latest run and comparison history in the local dashboard
 - prepare a PEFT/LoRA training plan from synthetic outputs
+- generate a cloud training bundle for an SSH-accessible GPU box
 
 ## Run It Locally
 
@@ -52,6 +60,7 @@ python3 -m ai_lab.cli run --config config/lab.sample.yaml
 python3 -m ai_lab.cli query "What is the recommended research cadence?" --config config/lab.sample.yaml
 python3 -m ai_lab.cli serve --config config/lab.sample.yaml
 python3 -m ai_lab.cli train --config config/lab.sample.yaml --synthetic storage/synthetic/<latest-run>.jsonl --dry-run
+python3 -m ai_lab.cli watch --config config/lab.sample.yaml --once
 ```
 
 Then open `http://127.0.0.1:8787`.
@@ -72,11 +81,12 @@ It currently:
 - writes a PEFT training manifest and JSON config
 - supports `--dry-run` for wiring validation
 - runs a real `transformers` + `peft` SFT job when the ML dependencies are installed
+- can emit a cloud bundle when `cloud.enabled: true` or `--cloud` is passed
 
 ## Suggested Next Steps
 
-1. Add a richer prompt library for different workflow types.
-2. Expand the dashboard with per-task drill-down and answer diffs.
-3. Add incremental document watching so caches update automatically.
-4. Add a benchmark pack for latency and token-cost tracking.
-5. Add cloud training support that reuses the same synthetic dataset format.
+1. Add a richer evaluation pack with task-specific judges and external benchmark imports.
+2. Add provider-specific model adapters for hosted endpoints beyond Ollama and llama.cpp.
+3. Add a run replay view that can diff prompts, retrieved chunks, and model outputs side by side.
+4. Add an actual cloud job launcher for one target provider instead of just the SSH bundle.
+5. Add continuous dataset hygiene checks before every run.
