@@ -1,92 +1,217 @@
 # Sydney AI Research Lab
 
-Local-first research lab for eval-driven iteration over open models.
+A local-first experimentation environment for studying **AI evaluation, retrieval-augmented generation (RAG), model comparison, and iterative improvement**.
 
-This repo is intentionally small and boring:
+I built this project as a hands-on way to learn an important question in AI development:
 
-- ingest local docs and notes
-- chunk them with metadata
-- build a lightweight local retrieval index
-- run frozen eval tasks against variants
-- log results to SQLite and JSON artifacts
-- derive synthetic training examples from good outputs
-- track latency, token counts, and estimated cost per run
-- offer optional Ollama or llama.cpp inference backends
-- prepare real PEFT / LoRA training jobs from synthetic outputs
+> **How can we tell whether a change to an AI system actually makes it better?**
+
+Instead of relying only on subjective impressions, the lab runs repeatable evaluation tasks, compares system variants, records results, and preserves experiment artifacts for later analysis.
+
+## Why I Built This
+
+As I started building with AI systems, I became interested in the difference between making a model *look* better and measuring whether it is actually more useful or reliable.
+
+This project is my environment for learning that process through experimentation. It lets me test changes such as retrieval, prompts, model backends, and synthetic training data against a consistent evaluation set.
+
+The project is intentionally local-first so experiments can be understandable, reproducible, and inexpensive to run.
+
+## Research Loop
+
+```text
+Documents / Notes
+       ↓
+Ingestion + Chunking
+       ↓
+Retrieval Index
+       ↓
+Baseline ─────────────┐
+       ↓              │
+RAG / Variant         │
+       ↓              │
+Evaluation Tasks      │
+       ↓              │
+Scores + Comparisons ←┘
+       ↓
+Experiment Logs
+       ↓
+Synthetic Data / Next Experiment
+```
+
+The goal is to make improvement **measurable rather than assumed**.
+
+## What the Lab Can Do
+
+### Evaluation
+
+- Run frozen evaluation tasks across multiple system variants
+- Score outputs with task-specific rubrics and pass/fail checks
+- Compare baseline and RAG results task by task
+- Preserve experiment results for repeatable comparison
+
+### Retrieval
+
+- Ingest Markdown, text, JSON, and JSONL documents
+- Split documents into stable, metadata-aware chunks
+- Build a lightweight TF-IDF-style local retrieval index
+- Cache retrieval artifacts using document fingerprints
+- Query the index from the command line
+
+### Experiment Tracking
+
+- Record experiment results in SQLite and JSON artifacts
+- Track latency, prompt tokens, completion tokens, and estimated cost
+- Display the latest experiment and comparison history in a local dashboard
+- Automatically refresh changed documents and optionally rerun experiments
+
+### Model Experimentation
+
+- Run through local Ollama models
+- Use llama.cpp-compatible backends
+- Fall back to a simple heuristic adapter for pipeline testing
+- Compare baseline and retrieval-augmented configurations
+
+### Synthetic Data & Training
+
+- Derive synthetic instruction/response examples from stronger experiment outputs
+- Export synthetic datasets as JSONL
+- Prepare PEFT / LoRA training manifests
+- Validate training configuration with a dry-run workflow
+- Generate an SSH-ready cloud training bundle
 
 ## Architecture
 
-- `ai_lab/app.py` - simple HTML dashboard served locally
-- `ai_lab/cli.py` - command line entrypoint for run/query/serve
-- `ai_lab/pipeline/ingest.py` - load markdown, text, json, and jsonl docs
-- `ai_lab/pipeline/chunking.py` - split documents into retrievable chunks
-- `ai_lab/pipeline/retrieval.py` - sparse local embedding/index/search
-- `ai_lab/pipeline/evals.py` - eval task loading and scoring
-- `ai_lab/pipeline/synthetic.py` - generate instruction-response examples from strong runs
-- `ai_lab/pipeline/prompts.py` - prompt library for baseline, RAG, and synthesis profiles
-- `ai_lab/pipeline/experiments.py` - orchestrate the eval-driven experiment loop
-- `ai_lab/pipeline/training.py` - prepare LoRA datasets and manifests
-- `ai_lab/pipeline/watching.py` - polling watcher that refreshes cached docs and can rerun experiments
-- `ai_lab/pipeline/cloud.py` - cloud training bundle generator for remote SSH-based launches
-- `ai_lab/model_adapters.py` - local model backends for Ollama, llama.cpp, or fallback heuristic
-- `ai_lab/storage.py` - SQLite-backed run/result logging
-- `config/` - sample configs
-- `storage/` - sample docs, datasets, and runtime artifacts
+```text
+ai_lab/
+├── app.py                 # local experiment dashboard
+├── cli.py                 # run, query, serve, train, and watch commands
+├── model_adapters.py      # Ollama, llama.cpp, and fallback adapters
+├── storage.py             # SQLite-backed experiment logging
+├── pipeline/
+│   ├── ingest.py          # document ingestion
+│   ├── chunking.py        # metadata-aware document chunking
+│   ├── retrieval.py       # local sparse retrieval/indexing
+│   ├── evals.py           # evaluation loading and scoring
+│   ├── prompts.py         # baseline, RAG, and synthesis prompts
+│   ├── experiments.py     # experiment orchestration
+│   ├── synthetic.py       # synthetic example generation
+│   ├── training.py        # LoRA dataset / manifest preparation
+│   ├── watching.py        # document refresh + experiment watcher
+│   └── cloud.py           # remote training bundle generation
+└── scripts/
+    └── train_peft_sft.py  # PEFT supervised fine-tuning entrypoint
 
-## What Works In The MVP
+config/                    # example experiment configuration
+storage/                   # sample documents, datasets, and run artifacts
+```
 
-- ingest docs from `storage/docs`
-- chunk them into stable IDs
-- cache chunk/index artifacts by document fingerprint
-- refresh cached docs automatically with a polling watcher
-- build a TF-IDF-like sparse retrieval index
-- query the index from the CLI
-- run baseline and RAG-style experiments through a local model adapter
-- score answers with task-specific rubrics and pass/fail checks
-- inspect per-task baseline vs RAG diffs in the dashboard
-- track latency, prompt tokens, completion tokens, and estimated cost
-- save run artifacts and results to `storage/lab.sqlite3`
-- derive synthetic JSONL from better-scoring outputs
-- show the latest run and comparison history in the local dashboard
-- prepare a PEFT/LoRA training plan from synthetic outputs
-- generate a cloud training bundle for an SSH-accessible GPU box
+## Quick Start
 
-## Run It Locally
-
-From the repo root:
+From the repository root:
 
 ```bash
 python3 -m ai_lab.cli run --config config/lab.sample.yaml
-python3 -m ai_lab.cli query "What is the recommended research cadence?" --config config/lab.sample.yaml
+```
+
+Query the retrieval index:
+
+```bash
+python3 -m ai_lab.cli query "What is the recommended research cadence?" \
+  --config config/lab.sample.yaml
+```
+
+Launch the local dashboard:
+
+```bash
 python3 -m ai_lab.cli serve --config config/lab.sample.yaml
-python3 -m ai_lab.cli train --config config/lab.sample.yaml --synthetic storage/synthetic/<latest-run>.jsonl --dry-run
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8787
+```
+
+Run the document watcher once:
+
+```bash
 python3 -m ai_lab.cli watch --config config/lab.sample.yaml --once
 ```
 
-Then open `http://127.0.0.1:8787`.
+Prepare a training run without launching training:
 
-## Optional Backends
+```bash
+python3 -m ai_lab.cli train \
+  --config config/lab.sample.yaml \
+  --synthetic storage/synthetic/<latest-run>.jsonl \
+  --dry-run
+```
 
-- Set `model.provider: ollama` in [`config/lab.sample.yaml`](/Users/sydneyjackson/ai-lab/config/lab.sample.yaml) if you have Ollama running locally.
-- Set `model.provider: llamacpp` and point `model.llama_command` at your local llama.cpp binary or wrapper command.
-- Leave `model.provider: auto` to try Ollama, then llama.cpp, then the heuristic fallback.
+## Model Backends
+
+The sample configuration supports three modes:
+
+- **Ollama** — local model inference
+- **llama.cpp** — local inference through a compatible command or wrapper
+- **Auto** — tries Ollama, then llama.cpp, then the heuristic fallback
+
+See [`config/lab.sample.yaml`](config/lab.sample.yaml) for configuration.
 
 ## Training Path
 
-The PEFT entrypoint is [`ai_lab/scripts/train_peft_sft.py`](/Users/sydneyjackson/ai-lab/ai_lab/scripts/train_peft_sft.py).
+The PEFT training entrypoint is [`ai_lab/scripts/train_peft_sft.py`](ai_lab/scripts/train_peft_sft.py).
 
-It currently:
+It can:
 
-- reads the synthetic JSONL produced by experiments
-- writes a PEFT training manifest and JSON config
-- supports `--dry-run` for wiring validation
-- runs a real `transformers` + `peft` SFT job when the ML dependencies are installed
-- can emit a cloud bundle when `cloud.enabled: true` or `--cloud` is passed
+- read synthetic JSONL generated from experiments
+- create a PEFT training manifest and JSON configuration
+- perform dry-run validation
+- launch a `transformers` + `peft` supervised fine-tuning job when ML dependencies are installed
+- generate a cloud-ready training bundle when cloud mode is enabled
 
-## Suggested Next Steps
+## What I'm Evaluating
 
-1. Add a richer evaluation pack with task-specific judges and external benchmark imports.
-2. Add provider-specific model adapters for hosted endpoints beyond Ollama and llama.cpp.
-3. Add a run replay view that can diff prompts, retrieved chunks, and model outputs side by side.
-4. Add an actual cloud job launcher for one target provider instead of just the SSH bundle.
-5. Add continuous dataset hygiene checks before every run.
+This project is evolving toward questions such as:
+
+- When does retrieval improve an answer, and when does it make it worse?
+- How should AI-system changes be evaluated beyond a few hand-picked examples?
+- How stable are results across repeated tasks and prompt variants?
+- Can failure cases be turned into useful future evaluation examples?
+- How should latency and cost be balanced against quality improvements?
+- What makes an evaluation meaningful rather than merely easy to pass?
+
+## Current Limitations
+
+This is an experimental learning project, not a production ML platform.
+
+Current limitations include:
+
+- the retrieval system is intentionally lightweight rather than embedding-model based
+- evaluation rubrics are still small and need broader coverage
+- the fallback model adapter is for pipeline validation, not meaningful model benchmarking
+- cloud training currently prepares bundles rather than managing a complete remote training lifecycle
+- synthetic examples should be reviewed carefully before being treated as high-quality training data
+
+Documenting these limitations is part of the project: I want the repository to show not only what works, but also what still needs to be tested.
+
+## Next Experiments
+
+1. Expand the evaluation suite with more diverse and adversarial tasks.
+2. Add model-based judges while comparing them against deterministic scoring.
+3. Add hosted-model adapters for controlled cross-model comparisons.
+4. Build a replay view for comparing prompts, retrieved context, and outputs side by side.
+5. Add dataset-quality checks before synthetic examples enter a training set.
+6. Track repeated-run variance instead of relying on single measurements.
+7. Add failure categorization for hallucination, retrieval error, instruction failure, and incomplete answers.
+
+## What I'm Learning
+
+This project is helping me develop practical understanding of:
+
+`Python` · `AI Evaluation` · `RAG` · `Experiment Design` · `Retrieval` · `SQLite` · `Local Models` · `Synthetic Data` · `PEFT / LoRA` · `Model Reliability`
+
+I use AI-assisted development tools as part of my workflow, but my goal is to understand the systems I build: how the pieces interact, how to test them, where they fail, and how to improve them through evidence rather than intuition.
+
+---
+
+**Status:** Active learning / research project
